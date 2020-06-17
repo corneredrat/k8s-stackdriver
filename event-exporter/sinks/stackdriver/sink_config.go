@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"os"
 
 	"cloud.google.com/go/compute/metadata"
 )
@@ -46,10 +47,16 @@ func newGceSdSinkConfig() (*sdSinkConfig, error) {
 		return nil, errors.New("not running on GCE, which is not supported for Stackdriver sink")
 	}
 
-	projectID, err := metadata.ProjectID()
+/*	projectID, err := metadata.ProjectID()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get project id: %v", err)
+		return nil, fmt.Errorf("failed to get project id : %v", err)
 	}
+*/
+	projectID := os.Getenv("LOGGING_PROJECT_ID")
+	if projectID == "" {
+		return nil, fmt.Errorf("Failed to get project id : env LOGGING_PROJECT_ID not set.")
+	}
+
 
 	logName := fmt.Sprintf("projects/%s/logs/%s", projectID, eventsLogName)
 

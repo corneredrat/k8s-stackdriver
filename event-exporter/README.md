@@ -1,86 +1,92 @@
-# Event Exporter
+## See README-ORIGINAL.md for more details.
 
-This tool is used to export Kubernetes events. It effectively runs a watch on
-the apiserver, detecting as granular as possible all changes to the event
-objects. Event exporter exports only to Stackdriver.
+This is a modified version of `event exporter`, which can export "events" to a project of our choice.
 
-## Build
+## Steps
 
-To build the binary, run
+## Build image
 
-```shell
-make build
 ```
-
-To run unit tests, run
-
-```shell
-make test
-```
-
-To build the container, run
-
-```shell
 make container
 ```
+If the above command fails , add your user to docker group so that you can [run docker commands without sudo](https://docs.docker.com/engine/install/linux-postinstall/#manage-docker-as-a-non-root-user)
 
-## Run
+The newly built image will be tagged as `staging-k8s.gcr.io/event-exporter:v0.3.1` (or perhaps a different version)
 
-Event exporter has following options:
-
+tag the image to your own repository, from which your k8s clusters can pull.
 ```
--prometheus-endpoint string
-    Endpoint on which to expose Prometheus http handler (default ":80")
--resync-period duration
-    Reflector resync period (default 1m0s)
--sink-opts string
-    Parameters for configuring sink
+docker tag staging-k8s.gcr.io/event-exporter:v0.3.1 <repository>/event-exporter:<tag>
 ```
 
-Set of flags for configuring sink is the following:
+## Upload service account json as a secret
 
-```
-Usage of stackdriver:
-  -flush-delay duration
-      Delay after receiving the first event in batch before sending the request to Stackdriver, if batchdoesn't get sent before (default 5s)
-  -max-buffer-size int
-      Maximum number of events in the request to Stackdriver (default 100)
-  -max-concurrency int
-      Maximum number of concurrent requests to Stackdriver (default 10)
-  -endpoint string
-      Base path for Stackdriver API (default "https://logging.googleapis.com/")
+Upload a service account key to a path accessible by container, and set env valriable to its path.
+Please refer to the documentation [here](https://cloud.google.com/logging/docs/agent/authorization#copy-private-key) for more details.
+
+creating the secret: 
+```shell
+kubectl create -n kube-system secret generic sa-key --from-file=application_default_credentials.json  --kubeconfig /path/to/kubeconfig-file
 ```
 
-## Deploy
-
-Example deployment:
+## Deploy event-notifier with approriate env-variable settings.
 
 ```yaml
-apiVersion: apps/v1beta1
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: event-exporter-sa
+  namespace: default
+  labels:
+    app: event-exporter
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: event-exporter-rb
+  labels:
+    app: event-exporter
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: view
+subjects:
+- kind: ServiceAccount
+  name: event-exporter-sa
+  namespace: default
+---
+apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: event-exporter-deployment
+  name: event-exporter
+  namespace: default
+  labels:
+    app: event-exporter
 spec:
+  selector:
+    matchLabels:
+      app: event-exporter
   replicas: 1
   template:
     metadata:
       labels:
         app: event-exporter
     spec:
+      serviceAccountName: event-exporter-sa
       containers:
       - name: event-exporter
-        image: gcr.io/google-containers/event-exporter:v0.1.4
+        image: <repository>/event-exporter:<tag>
+        env:
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /etc/google/auth/application_default_credentials.json
+        volumeMounts:
+        - name: sa-key
+          mountPath: /etc/google/auth
         command:
         - '/event-exporter'
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: sa-key
+        secret: 
+          defaultMode: 420
+          secretName: sa-key
 ```
-
-## Notes
-### ClusterRoleBinding
-This pod's service account should be authorized to get events, you
-might need to set up ClusterRoleBinding in order to make it possible. Complete
-example with the service account and the cluster role binding you can find in
-the `example` directory.
-### "resourceVersion for the provided watch is too old"
-On a system with few/no events, you may see "The resourceVersion for the provided
-watch is too old" warnings. These can be ignored. This is due to compacted resource
-versions being referenced.
